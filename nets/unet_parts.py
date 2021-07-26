@@ -9,10 +9,10 @@ class DoubleConv(nn.Module):
         if not mid_channels:
             mid_channels = out_channels
         self.double_conv = nn.Sequential(
-            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels, mid_channels, 3, 1, 1, bias=False),
             nn.BatchNorm2d(mid_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1),
+            nn.Conv2d(mid_channels, out_channels, 3, 1, 1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
@@ -35,6 +35,52 @@ class Down(nn.Module):
         return self.maxpool_conv(x)
 
 
+class AttGate(nn.Module):
+    def __init__(self, F_g, F_l, F_int):
+        super(AttGate, self).__init__()
+        self.W_g = nn.Sequential(
+            nn.Conv2d(F_g, F_int, kernel_size=(1, 1), bias=False),
+            nn.BatchNorm2d(F_int)
+        )
+
+        self.W_x = nn.Sequential(
+            nn.Conv2d(F_l, F_int, kernel_size=(1, 1), bias=False),
+            nn.BatchNorm2d(F_int)
+        )
+
+        self.psi = nn.Sequential(
+            nn.Conv2d(F_int, 1, kernel_size=(1, 1), bias=False),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid()
+        )
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, g, x):
+        g1 = self.W_g(g)
+        x1 = self.W_x(x)
+        psi = self.relu(g1 + x1)
+        psi = self.psi(psi)
+
+        return x * psi
+
+
+class ExpansiveBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(ExpansiveBlock, self).__init__()
+
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=(3, 3), padding=(1, 1)),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(out_channels)
+        )
+
+    def forward(self, x):
+        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
+        out = self.block(x)
+        return out
+
+
 class Up(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
@@ -55,7 +101,7 @@ class Up(nn.Module):
 class OutConv(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(OutConv, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        self.conv = nn.Conv2d(in_channels, out_channels, 1)
 
     def forward(self, x):
         return self.conv(x)

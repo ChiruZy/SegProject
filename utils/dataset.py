@@ -12,7 +12,8 @@ class TransSet:
     """
     A transform set include random crop, random horizontal flip, random color jitter.
     """
-    def __init__(self, crop=(32, 32), flip_p=0.5, color_jitter=(0.1, 0.1, 0.1, 0.1)):
+    def __init__(self, resize=None, crop=None, flip_p=0.5, color_jitter=(0.1, 0.1, 0.1, 0.1)):
+        self.resize = resize
         self.crop = crop
         self.flip = flip_p
         self.colo_jitter = color_jitter
@@ -20,6 +21,8 @@ class TransSet:
     def __call__(self, img, mask):
         img, mask = transforms.F.to_pil_image(img), transforms.F.to_pil_image(mask)
 
+        if self.resize:
+            img, mask = transforms.F.resize(img, self.resize), transforms.F.resize(mask, self.resize)
         if self.crop:
             xyxy = transforms.RandomCrop.get_params(img, self.crop)
             img, mask = transforms.F.crop(img, *xyxy), transforms.F.crop(mask, *xyxy)
@@ -27,7 +30,6 @@ class TransSet:
             img, mask = transforms.F.hflip(img), transforms.F.hflip(mask)
         if self.colo_jitter:
             img = transforms.ColorJitter(*self.colo_jitter)(img)
-
         return transforms.F.to_tensor(img), torch.from_numpy(np.array(mask, np.float32))
 
 
@@ -59,13 +61,11 @@ class SimpleDataset(Dataset):
         if self.trans_set:
             image, mask = self.trans_set(image, mask)
         else:
-            transforms.F.to_tensor(image), torch.from_numpy(np.array(mask, np.float32))
+            image, mask = transforms.F.to_tensor(image), torch.from_numpy(np.array(mask, np.float32))
 
-        if self.output_channel > 1:
-            mask = F.one_hot(mask, num_classes=self.output_channel).permute(2,0,1)
-        else:
+        if self.output_channel == 1:
             mask[mask > 0] = 1
-            mask = mask.view(1, *mask.shape)
+        mask = mask.view(1, *mask.shape)
         return image, mask
 
     def __len__(self):
