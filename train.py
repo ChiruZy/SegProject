@@ -93,7 +93,7 @@ def train_net(net, args, device):
     for epoch in range(args.epochs):
 
         # train
-        with tqdm(total=len(train), desc=f'train: {epoch + 1}/{args.epochs}', unit='img') as pbar:
+        with tqdm(total=len(train), desc=f'train: {epoch + 1}/{args.epochs}', unit='img', ascii=True) as pbar:
             epoch_loss, iou, n = 0, 0, 0
             net.train()
             for img, mask in train_loader:
@@ -125,7 +125,7 @@ def train_net(net, args, device):
         # val
         if not val:
             continue
-        with tqdm(total=len(val), desc=f'val:   {epoch + 1}/{args.epochs}', unit='img') as pbar:
+        with tqdm(total=len(val), desc=f'val:   {epoch + 1}/{args.epochs}', unit='img', ascii=True) as pbar:
             net.eval()
             iou, n = 0, 0
 
@@ -158,7 +158,7 @@ def train_net(net, args, device):
     # test
     if test:
         iou, n = 0, 0
-        with tqdm(total=len(test), desc=f'test: ', unit='img') as pbar:
+        with tqdm(total=len(test), desc=f'test: ', unit='img', ascii=True) as pbar:
             net.load_state_dict(torch.load(f'checkpoint/{time_str}.pt'))
             net.eval()
 
