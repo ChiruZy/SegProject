@@ -12,7 +12,7 @@ class TransSet:
     """
     A transform set include random crop, random horizontal flip, random color jitter.
     """
-    def __init__(self, resize=None, crop=None, flip_p=0.5, color_jitter=(0.1, 0.1, 0.1, 0.1)):
+    def __init__(self, resize=None, crop=None, flip_p=None, color_jitter=None):
         self.resize = resize
         self.crop = crop
         self.flip = flip_p
@@ -26,7 +26,7 @@ class TransSet:
         if self.crop:
             xyxy = transforms.RandomCrop.get_params(img, self.crop)
             img, mask = transforms.F.crop(img, *xyxy), transforms.F.crop(mask, *xyxy)
-        if np.random.rand() > self.flip:
+        if self.flip and np.random.rand() > self.flip:
             img, mask = transforms.F.hflip(img), transforms.F.hflip(mask)
         if self.colo_jitter:
             img = transforms.ColorJitter(*self.colo_jitter)(img)
