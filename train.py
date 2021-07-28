@@ -3,7 +3,7 @@ import os
 import argparse
 import logging
 from tqdm import tqdm
-from nets import UNet, AttUNet, VGG_FCN, Res_FCN
+from nets import UNet, AttUNet, VGG_FCN, Res_FCN, UNet_CBAM, UNet_SE
 from torch import optim, nn
 from torch.backends import cudnn
 from torch.utils.data import DataLoader
@@ -14,7 +14,8 @@ from utils import dice_loss, miou, SimpleDataset, TransSet
 def get_args():
     parser = argparse.ArgumentParser(description='Train the nets on different datasets')
     parser.add_argument('-e', '--epochs', type=int, default=100, help='Number of epochs')
-    parser.add_argument('-n', '--net', type=str, default='VGG_FCN', help='UNet AttUNet VGG_FPN Res_FPN')
+    parser.add_argument('-n', '--net', type=str, default='UNet_SE',
+                        help='UNet AttUNet UNet_CBAM UNet_SE VGG_FPN Res_FPN')
     parser.add_argument('-b', '--batch_size', type=int, default=4, help='Batch size')
     parser.add_argument('-i', '--input_channels', type=int, default=3, help='input channels')
     parser.add_argument('-o', '--output_channels', type=int, default=1, help='output channels')

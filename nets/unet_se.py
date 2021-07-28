@@ -1,6 +1,6 @@
-import torch
-import torch.nn as nn
+from torch import nn
 import torch.nn.functional as F
+import torch
 
 
 class DoubleConv(nn.Module):
@@ -61,14 +61,39 @@ class OutConv(nn.Module):
         return self.conv(x)
 
 
-class UNet(nn.Module):
+class SEBlock(nn.Module):
+    def __init__(self, input_channels, reduction_ratio=16):
+        super(SEBlock, self).__init__()
+        self.input_channels = input_channels
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.MLP = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(input_channels, input_channels // reduction_ratio),
+            nn.ReLU(),
+            nn.Linear(input_channels // reduction_ratio, input_channels)
+        )
+
+    def forward(self, x):
+        avg_values = self.avg_pool(x)
+        out = self.MLP(avg_values)
+
+        scale = x * torch.sigmoid(out).unsqueeze(2).unsqueeze(3)
+        return scale
+
+
+class UNet_SE(nn.Module):
     def __init__(self, kwargs):
-        super(UNet, self).__init__()
+        super(UNet_SE, self).__init__()
         self.inc = DoubleConv(kwargs['in_c'], 64)
         self.down1 = Down(64, 128)
         self.down2 = Down(128, 256)
         self.down3 = Down(256, 512)
         self.down4 = Down(512, 512)
+        self.se0 = SEBlock(64)
+        self.se1 = SEBlock(128)
+        self.se2 = SEBlock(256)
+        self.se3 = SEBlock(512)
+        self.se4 = SEBlock(512)
         self.up1 = Up(1024, 256)
         self.up2 = Up(512, 128)
         self.up3 = Up(256, 64)
@@ -78,9 +103,17 @@ class UNet(nn.Module):
     def forward(self, x):
         x1 = self.inc(x)
         x2 = self.down1(x1)
+        x1 = self.se0(x1)
+
         x3 = self.down2(x2)
+        x2 = self.se1(x2)
+
         x4 = self.down3(x3)
-        x5 = self.down4(x4)
+        x3 = self.se2(x3)
+
+        x5 = self.se4(self.down4(x4))
+        x4 = self.se3(x4)
+
         x = self.up1(x5, x4)
         x = self.up2(x, x3)
         x = self.up3(x, x2)
@@ -89,3 +122,7 @@ class UNet(nn.Module):
         return logits
 
 
+if __name__ == '__main__':
+    t = torch.ones((4, 3, 512, 512))
+    se = UNet_SE({'in_c':3, 'out_c':1})
+    print(se(t).shape)
