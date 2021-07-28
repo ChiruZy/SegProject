@@ -99,7 +99,7 @@ class SpatialAttention(nn.Module):
 
 
 class CBAM(nn.Module):
-    def __init__(self, input_channels, reduction_ratio=16, kernel_size=7):
+    def __init__(self, input_channels, reduction_ratio=16):
         super(CBAM, self).__init__()
         self.channel_att = ChannelAttention(input_channels, reduction_ratio=reduction_ratio)
         self.spatial_att = SpatialAttention()
@@ -118,6 +118,11 @@ class UNet_CBAM(nn.Module):
         self.down2 = Down(128, 256)
         self.down3 = Down(256, 512)
         self.down4 = Down(512, 512)
+        self.cb0 = CBAM(64)
+        self.cb1 = CBAM(128)
+        self.cb2 = CBAM(256)
+        self.cb3 = CBAM(512)
+        self.cb4 = CBAM(512)
         self.up1 = Up(1024, 256)
         self.up2 = Up(512, 128)
         self.up3 = Up(256, 64)
@@ -127,9 +132,17 @@ class UNet_CBAM(nn.Module):
     def forward(self, x):
         x1 = self.inc(x)
         x2 = self.down1(x1)
+        x1 = self.cb0(x1)
+
         x3 = self.down2(x2)
+        x2 = self.cb1(x2)
+
         x4 = self.down3(x3)
-        x5 = self.down4(x4)
+        x3 = self.cb2(x3)
+
+        x5 = self.cb4(self.down4(x4))
+        x4 = self.cb3(x4)
+
         x = self.up1(x5, x4)
         x = self.up2(x, x3)
         x = self.up3(x, x2)
