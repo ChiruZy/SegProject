@@ -50,12 +50,12 @@ class ConvBlock(nn.Module):
 
 
 class AttUNet(nn.Module):
-    def __init__(self, img_ch=3, output_ch=1):
+    def __init__(self, kwargs):
         super(AttUNet, self).__init__()
 
         self.Maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.Conv1 = ConvBlock(ch_in=img_ch, ch_out=64)
+        self.Conv1 = ConvBlock(ch_in=kwargs['in_c'], ch_out=64)
         self.Conv2 = ConvBlock(ch_in=64, ch_out=128)
         self.Conv3 = ConvBlock(ch_in=128, ch_out=256)
         self.Conv4 = ConvBlock(ch_in=256, ch_out=512)
@@ -77,7 +77,7 @@ class AttUNet(nn.Module):
         self.Att2 = AttentionBlock(F_g=64, F_l=64, F_int=32)
         self.Up_conv2 = ConvBlock(ch_in=128, ch_out=64)
 
-        self.Conv_1x1 = nn.Conv2d(64, output_ch, 1)
+        self.Conv_1x1 = nn.Conv2d(64, kwargs['out_c'], 1)
 
     def forward(self, x):
         # encoding path

@@ -1,32 +1,32 @@
 import torch
 import os
-import time
 import argparse
 import logging
 from tqdm import tqdm
-from nets import UNet, AttUNet
+from nets import UNet, AttUNet, VGG_FCN, Res_FCN
 from torch import optim, nn
 from torch.backends import cudnn
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from torch.utils.data import DataLoader, random_split
 from utils import dice_loss, miou, SimpleDataset, TransSet
 
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the nets on different datasets')
-    parser.add_argument('-e', '--epochs', type=int, default=50, help='Number of epochs')
-    parser.add_argument('-n', '--net', type=str, default='AttUNet', help='Net')
+    parser.add_argument('-e', '--epochs', type=int, default=100, help='Number of epochs')
+    parser.add_argument('-n', '--net', type=str, default='VGG_FCN', help='UNet AttUNet VGG_FPN Res_FPN')
     parser.add_argument('-b', '--batch_size', type=int, default=4, help='Batch size')
     parser.add_argument('-i', '--input_channels', type=int, default=3, help='input channels')
     parser.add_argument('-o', '--output_channels', type=int, default=1, help='output channels')
-    parser.add_argument('-l', '--learning_rate', type=float, default=0.03, help='Learning rate')
+    parser.add_argument('-l', '--learning_rate', type=float, default=0.01, help='Learning rate')
+    parser.add_argument('-p', '--pretrain', action="store_true", help='use pretrain(only VGG_FPN, Res_FPN)')
     parser.add_argument('-d', '--dataset_path', type=str, default='./datas/Glas', help='Dataset path')
 
     return parser.parse_args()
 
 
-def get_net(name, in_c, out_c):
-    net = eval(f'{name}({in_c}, {out_c})')
+def get_net(name, **kwargs):
+    net = eval(name)(kwargs)
     assert isinstance(net, nn.Module), "it's not a subclass of nn.Module"
     return net
 
@@ -47,11 +47,11 @@ def train_net(net, args, device):
 
     # get dataset & dataloader
     train = SimpleDataset(args.dataset_path + '/train', output_channel=args.output_channels,
-                          trans_set=TransSet(resize=(256, 400), color_jitter=(0.1, 0.1, 0.1, 0.1), flip_p=0.5))
+                          trans_set=TransSet(resize=(256, 384), color_jitter=(0.1, 0.1, 0.1, 0.1), flip_p=0.5))
     val = SimpleDataset(args.dataset_path + '/val', output_channel=args.output_channels,
-                        trans_set=TransSet(resize=(256, 400)))
+                        trans_set=TransSet(resize=(256, 384)))
     test = SimpleDataset(args.dataset_path + '/test', output_channel=args.output_channels,
-                         trans_set=TransSet(resize=(256, 400)))
+                         trans_set=TransSet(resize=(256, 384)))
 
     train_loader = DataLoader(train, batch_size=args.batch_size, shuffle=True, pin_memory=True)
     val_loader = DataLoader(val, batch_size=args.batch_size, shuffle=True, pin_memory=True)
@@ -78,9 +78,9 @@ def train_net(net, args, device):
     Device:          {device.type}''')
 
     max_iou = 0
-    time_str = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+    hparam_info = f'{args.net}-e{args.epochs}-bs{args.batch_size}-lr{args.learning_rate}'
 
-    writer = SummaryWriter(log_dir=f'runs/{time_str}')
+    writer = SummaryWriter(log_dir=f'runs/{hparam_info}')
     writer.add_text('hparam', str({'net': args.net,
                                    'epoch': args.epochs,
                                    'batch size': args.batch_size,
@@ -150,7 +150,7 @@ def train_net(net, args, device):
                 max_iou = iou / n
                 if not os.path.exists('checkpoint'):
                     os.mkdir('checkpoint')
-                torch.save(net.state_dict(), f'checkpoint/{time_str}.pt')
+                torch.save(net.state_dict(), f'checkpoint/{hparam_info}.pt')
                 pbar.set_postfix(**{'m_IoU:': f'{iou / n:.3f}, params saved!'})
 
     logging.info(f'Training is over, the max m_IoU is {max_iou}.')
@@ -159,7 +159,7 @@ def train_net(net, args, device):
     if test:
         iou, n = 0, 0
         with tqdm(total=len(test), desc=f'test: ', unit='img', ascii=True) as pbar:
-            net.load_state_dict(torch.load(f'checkpoint/{time_str}.pt'))
+            net.load_state_dict(torch.load(f'checkpoint/{hparam_info}.pt'))
             net.eval()
 
             with torch.no_grad():
@@ -192,7 +192,7 @@ if __name__ == '__main__':
         cudnn.benchmark = True
     else:
         device = torch.device('cpu')
-    net = get_net(args.net, args.input_channels, args.output_channels).to(device=device)
+    net = get_net(args.net, in_c=args.input_channels, out_c=args.output_channels, pretrain=args.pretrain).to(device=device)
 
     # logging setting
     logging.basicConfig(level=logging.DEBUG, format='%(levelname)s:%(message)s')
