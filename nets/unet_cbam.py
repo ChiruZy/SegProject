@@ -77,7 +77,7 @@ class ChannelAttention(nn.Module):
     def forward(self, x):
         avg_values = self.avg_pool(x)
         max_values = self.max_pool(x)
-        out = self.MLP(avg_values + max_values)
+        out = self.MLP(avg_values) + self.MLP(max_values)
         scale = x * torch.sigmoid(out).unsqueeze(2).unsqueeze(3).expand_as(x)
         return scale
 

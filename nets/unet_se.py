@@ -77,7 +77,7 @@ class SEBlock(nn.Module):
         avg_values = self.avg_pool(x)
         out = self.MLP(avg_values)
 
-        scale = x * torch.sigmoid(out).unsqueeze(2).unsqueeze(3)
+        scale = x * torch.sigmoid(out).unsqueeze(2).unsqueeze(3) + x
         return scale
 
 

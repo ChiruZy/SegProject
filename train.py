@@ -3,7 +3,7 @@ import os
 import argparse
 import logging
 from tqdm import tqdm
-from nets import UNet, AttUNet, VGG_FCN, Res_FCN, UNet_CBAM, UNet_SE
+from nets import UNet, AttUNet, VGG_FCN, Res_FCN, UNet_CBAM, UNet_SE, TANet
 from torch import optim, nn
 from torch.backends import cudnn
 from torch.utils.data import DataLoader
@@ -13,15 +13,16 @@ from utils import dice_loss, miou, SimpleDataset, TransSet
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the nets on different datasets')
-    parser.add_argument('-e', '--epochs', type=int, default=100, help='Number of epochs')
-    parser.add_argument('-n', '--net', type=str, default='UNet_SE',
-                        help='UNet AttUNet UNet_CBAM UNet_SE VGG_FPN Res_FPN')
-    parser.add_argument('-b', '--batch_size', type=int, default=4, help='Batch size')
+    parser.add_argument('-e', '--epochs', type=int, default=50, help='Number of epochs')
+    parser.add_argument('-n', '--net', type=str, default='TANet',
+                        help='UNet AttUNet UNet_CBAM UNet_SE VGG_FCN Res_FCN')
+    parser.add_argument('-b', '--batch_size', type=int, default=2, help='Batch size')
     parser.add_argument('-i', '--input_channels', type=int, default=3, help='input channels')
     parser.add_argument('-o', '--output_channels', type=int, default=1, help='output channels')
     parser.add_argument('-l', '--learning_rate', type=float, default=0.01, help='Learning rate')
-    parser.add_argument('-p', '--pretrain', action="store_true", help='use pretrain(only VGG_FPN, Res_FPN)')
+    parser.add_argument('-p', '--pretrain', action="store_true", help='use pretrain(only for net include VGG or Res)')
     parser.add_argument('-d', '--dataset_path', type=str, default='./datas/Glas', help='Dataset path')
+    parser.add_argument('-s', '--save', action="store_false", help='save train data')
 
     return parser.parse_args()
 
@@ -61,8 +62,9 @@ def train_net(net, args, device):
     # set optim, loss func, scheduler
     optimizer = optim.SGD(list(net.parameters()), lr=args.learning_rate, weight_decay=weight_decay, momentum=0.9)
     criterion = nn.CrossEntropyLoss() if args.output_channels > 1 else nn.BCEWithLogitsLoss()
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs * len(train) // args.batch_size,
-                                                     eta_min=eta_min)
+    scheduler = None
+    # scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs * len(train) // args.batch_size,
+    #                                                  eta_min=eta_min)
 
     # set summary
     if not os.path.exists('runs'):
@@ -79,20 +81,23 @@ def train_net(net, args, device):
     Device:          {device.type}''')
 
     max_iou = 0
-    hparam_info = f'{args.net}-e{args.epochs}-bs{args.batch_size}-lr{args.learning_rate}'
+    hparam_info = f'{args.net}-e{args.epochs}-bs{args.batch_size}-lr{args.learning_rate},no_pretrain'
 
-    writer = SummaryWriter(log_dir=f'runs/{hparam_info}')
-    writer.add_text('hparam', str({'net': args.net,
-                                   'epoch': args.epochs,
-                                   'batch size': args.batch_size,
-                                   'learning rate': args.learning_rate,
-                                   'weight decay': weight_decay,
-                                   'lr scheduler': 'CosineAnnealingLR',
-                                   'eta min': eta_min}))
+    writer = None
+    if args.save:
+        writer = SummaryWriter(log_dir=f'runs/{hparam_info}')
+        writer.add_text('hparam', str({'net': args.net,
+                                       'epoch': args.epochs,
+                                       'batch size': args.batch_size,
+                                       'learning rate': args.learning_rate,
+                                       'weight decay': weight_decay,
+                                       'lr scheduler': 'None',
+                                       'eta min': eta_min}))
 
     # start
     for epoch in range(args.epochs):
-
+        # if epoch == args.epochs // 2:
+        #     net.retrain()
         # train
         with tqdm(total=len(train), desc=f'train: {epoch + 1}/{args.epochs}', unit='img', ascii=True) as pbar:
             epoch_loss, iou, n = 0, 0, 0
@@ -108,7 +113,8 @@ def train_net(net, args, device):
                 loss.backward()
                 # nn.utils.clip_grad_value_(net.parameters(), 0.1)
                 optimizer.step()
-                scheduler.step()
+                if scheduler:
+                    scheduler.step()
 
                 # calc loss & iou
                 epoch_loss += loss.item()
@@ -119,9 +125,10 @@ def train_net(net, args, device):
                 pbar.set_postfix(**{'mean loss:': epoch_loss / n, 'm_IoU': iou / n})
                 pbar.update(img.shape[0])
 
-        writer.add_scalar('Loss/train', epoch_loss / n, epoch)
-        writer.add_scalar('m_IoU/train', iou / n, epoch)
-        writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], epoch)
+        if writer:
+            writer.add_scalar('Loss/train', epoch_loss / n, epoch)
+            writer.add_scalar('m_IoU/train', iou / n, epoch)
+            writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], epoch)
 
         # val
         if not val:
@@ -141,18 +148,19 @@ def train_net(net, args, device):
                     pbar.set_postfix(**{'m_IoU:': iou / n})
                     pbar.update(img.shape[0])
 
-                    if idx == 0:
-                        writer.add_images('test/images', img, epoch)
-                        writer.add_images('test/masks/true', mask, epoch)
-                        writer.add_images('test/masks/pred', mask_pred, epoch)
+                    if writer and idx == 0:
+                        writer.add_images('val/images', img, epoch)
+                        writer.add_images('val/masks/true', mask, epoch)
+                        writer.add_images('val/masks/pred', mask_pred, epoch)
 
-            writer.add_scalar('m_IoU/val', iou / n, epoch)
-            if iou / n > max_iou:
-                max_iou = iou / n
-                if not os.path.exists('checkpoint'):
-                    os.mkdir('checkpoint')
-                torch.save(net.state_dict(), f'checkpoint/{hparam_info}.pt')
-                pbar.set_postfix(**{'m_IoU:': f'{iou / n:.3f}, params saved!'})
+            if writer:
+                writer.add_scalar('m_IoU/val', iou / n, epoch)
+                if iou / n > max_iou:
+                    max_iou = iou / n
+                    if not os.path.exists('checkpoint'):
+                        os.mkdir('checkpoint')
+                    torch.save(net.state_dict(), f'checkpoint/{hparam_info}.pt')
+                    pbar.set_postfix(**{'m_IoU:': f'{iou / n:.3f}, params saved!'})
 
     logging.info(f'Training is over, the max m_IoU is {max_iou}.')
 
@@ -174,15 +182,17 @@ def train_net(net, args, device):
                     pbar.set_postfix(**{'m_IoU:': iou / n})
                     pbar.update(img.shape[0])
 
-                    writer.add_images('images', img)
-                    writer.add_images('masks/true', mask)
-                    writer.add_images('masks/pred', mask_pred)
-
-            writer.add_text('test m_IoU', str(iou / n))
+                    if writer:
+                        writer.add_images('images', img)
+                        writer.add_images('test/masks/true', mask)
+                        writer.add_images('test/masks/pred', mask_pred)
+            if writer:
+                writer.add_text('test m_IoU', str(iou / n))
         logging.info(f'Test m_IoU is {iou / n}.')
 
     # end train
-    writer.close()
+    if writer:
+        writer.close()
 
 
 if __name__ == '__main__':
