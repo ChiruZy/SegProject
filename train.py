@@ -3,7 +3,7 @@ import os
 import argparse
 import logging
 from tqdm import tqdm
-from nets import UNet, AttUNet, VGG_FCN, Res_FCN, UNet_CBAM, UNet_SE, TANet
+from nets import UNet, AttUNet, VGG_FCN, Res_FCN, UNet_CBAM, UNet_SE, PNet
 from torch import optim, nn
 from torch.backends import cudnn
 from torch.utils.data import DataLoader
@@ -14,13 +14,13 @@ from utils import dice_loss, miou, SimpleDataset, TransSet
 def get_args():
     parser = argparse.ArgumentParser(description='Train the nets on different datasets')
     parser.add_argument('-e', '--epochs', type=int, default=50, help='Number of epochs')
-    parser.add_argument('-n', '--net', type=str, default='TANet',
+    parser.add_argument('-n', '--net', type=str, default='AttUNet',
                         help='UNet AttUNet UNet_CBAM UNet_SE VGG_FCN Res_FCN')
     parser.add_argument('-b', '--batch_size', type=int, default=2, help='Batch size')
     parser.add_argument('-i', '--input_channels', type=int, default=3, help='input channels')
     parser.add_argument('-o', '--output_channels', type=int, default=1, help='output channels')
     parser.add_argument('-l', '--learning_rate', type=float, default=0.01, help='Learning rate')
-    parser.add_argument('-p', '--pretrain', action="store_true", help='use pretrain(only for net include VGG or Res)')
+    parser.add_argument('-p', '--pretrain', action="store_false", help='use pretrain(only for net include VGG or Res)')
     parser.add_argument('-d', '--dataset_path', type=str, default='./datas/Glas', help='Dataset path')
     parser.add_argument('-s', '--save', action="store_false", help='save train data')
 
@@ -168,9 +168,11 @@ def train_net(net, args, device):
     if test:
         iou, n = 0, 0
         with tqdm(total=len(test), desc=f'test: ', unit='img', ascii=True) as pbar:
-            net.load_state_dict(torch.load(f'checkpoint/{hparam_info}.pt'))
-            net.eval()
 
+            if args.save:
+                net.load_state_dict(torch.load(f'checkpoint/{hparam_info}.pt'))
+
+            net.eval()
             with torch.no_grad():
                 for img, mask in test_loader:
                     img, mask = map(lambda x: x.to(device), [img, mask])

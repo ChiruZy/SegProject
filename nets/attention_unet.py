@@ -29,7 +29,7 @@ class AttentionBlock(nn.Module):
         psi = self.relu(g1 + x1)
         psi = self.psi(psi)
 
-        return x * psi + x
+        return x * psi
 
 
 class ConvBlock(nn.Module):

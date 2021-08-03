@@ -107,7 +107,7 @@ class CBAM(nn.Module):
     def forward(self, x):
         out = self.channel_att(x)
         out = self.spatial_att(out)
-        return out
+        return out + x
 
 
 class UNet_CBAM(nn.Module):
