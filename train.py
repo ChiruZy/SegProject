@@ -14,14 +14,15 @@ from utils import dice_loss, miou, SimpleDataset, TransSet
 def get_args():
     parser = argparse.ArgumentParser(description='Train the nets on different datasets')
     parser.add_argument('-e', '--epochs', type=int, default=50, help='Number of epochs')
-    parser.add_argument('-n', '--net', type=str, default='AttUNet',
+    parser.add_argument('-n', '--net', type=str, default='PNet',
                         help='UNet AttUNet UNet_CBAM UNet_SE VGG_FCN Res_FCN')
     parser.add_argument('-b', '--batch_size', type=int, default=2, help='Batch size')
     parser.add_argument('-i', '--input_channels', type=int, default=3, help='input channels')
     parser.add_argument('-o', '--output_channels', type=int, default=1, help='output channels')
-    parser.add_argument('-l', '--learning_rate', type=float, default=0.01, help='Learning rate')
+    parser.add_argument('-l', '--learning_rate', type=float, default=0.03, help='Learning rate')
     parser.add_argument('-p', '--pretrain', action="store_false", help='use pretrain(only for net include VGG or Res)')
     parser.add_argument('-d', '--dataset_path', type=str, default='./datas/Glas', help='Dataset path')
+    parser.add_argument('-a', '--gradient_accumulation', type=int, default=0, help='Gradient accumulation')
     parser.add_argument('-s', '--save', action="store_false", help='save train data')
 
     return parser.parse_args()
@@ -49,11 +50,11 @@ def train_net(net, args, device):
 
     # get dataset & dataloader
     train = SimpleDataset(args.dataset_path + '/train', output_channel=args.output_channels,
-                          trans_set=TransSet(resize=(256, 384), color_jitter=(0.1, 0.1, 0.1, 0.1), flip_p=0.5))
+                          trans_set=TransSet(resize=(224, 224), color_jitter=(0.1, 0.1, 0.1, 0.1), flip_p=0.5))
     val = SimpleDataset(args.dataset_path + '/val', output_channel=args.output_channels,
-                        trans_set=TransSet(resize=(256, 384)))
+                        trans_set=TransSet(resize=(224, 224)))
     test = SimpleDataset(args.dataset_path + '/test', output_channel=args.output_channels,
-                         trans_set=TransSet(resize=(256, 384)))
+                         trans_set=TransSet(resize=(224, 224)))
 
     train_loader = DataLoader(train, batch_size=args.batch_size, shuffle=True, pin_memory=True)
     val_loader = DataLoader(val, batch_size=args.batch_size, shuffle=True, pin_memory=True)
@@ -81,7 +82,7 @@ def train_net(net, args, device):
     Device:          {device.type}''')
 
     max_iou = 0
-    hparam_info = f'{args.net}-e{args.epochs}-bs{args.batch_size}-lr{args.learning_rate},no_pretrain'
+    hparam_info = f'{args.net}-e{args.epochs}-bs{args.batch_size}-lr{args.learning_rate},fix2'
 
     writer = None
     if args.save:
@@ -95,6 +96,7 @@ def train_net(net, args, device):
                                        'eta min': eta_min}))
 
     # start
+    optimizer.zero_grad()
     for epoch in range(args.epochs):
         # if epoch == args.epochs // 2:
         #     net.retrain()
@@ -109,12 +111,15 @@ def train_net(net, args, device):
                 loss = criterion(mask_pre, mask) + dice_loss(mask_pre, mask, args.output_channels)
 
                 # backward
-                optimizer.zero_grad()
                 loss.backward()
-                # nn.utils.clip_grad_value_(net.parameters(), 0.1)
-                optimizer.step()
-                if scheduler:
-                    scheduler.step()
+
+                if args.gradient_accumulation == 0 or args.batch_size * (epoch+1) // args.gradient_accumulation == 0:
+                    # nn.utils.clip_grad_value_(net.parameters(), 0.1)
+                    optimizer.step()
+                    optimizer.zero_grad()
+
+                    if scheduler:
+                        scheduler.step()
 
                 # calc loss & iou
                 epoch_loss += loss.item()
