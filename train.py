@@ -14,7 +14,7 @@ from utils import dice_loss, miou, SimpleDataset, TransSet
 def get_args():
     parser = argparse.ArgumentParser(description='Train the nets on different datasets')
     parser.add_argument('-e', '--epochs', type=int, default=50, help='Number of epochs')
-    parser.add_argument('-n', '--net', type=str, default='PNet',
+    parser.add_argument('-n', '--net', type=str, default='UNet',
                         help='UNet AttUNet UNet_CBAM UNet_SE VGG_FCN Res_FCN')
     parser.add_argument('-b', '--batch_size', type=int, default=2, help='Batch size')
     parser.add_argument('-i', '--input_channels', type=int, default=3, help='input channels')
@@ -22,7 +22,7 @@ def get_args():
     parser.add_argument('-l', '--learning_rate', type=float, default=0.03, help='Learning rate')
     parser.add_argument('-p', '--pretrain', action="store_false", help='use pretrain(only for net include VGG or Res)')
     parser.add_argument('-d', '--dataset_path', type=str, default='./datas/Glas', help='Dataset path')
-    parser.add_argument('-a', '--gradient_accumulation', type=int, default=0, help='Gradient accumulation')
+    parser.add_argument('-a', '--gradient_accumulation', type=int, default=16, help='Gradient accumulation')
     parser.add_argument('-s', '--save', action="store_false", help='save train data')
 
     return parser.parse_args()
@@ -47,6 +47,7 @@ def train_net(net, args, device):
     # set hyperparameters
     weight_decay = 1e-4
     eta_min = 0
+    true_bs = args.batch_size if args.gradient_accumulation == 0 else args.gradient_accumulation
 
     # get dataset & dataloader
     train = SimpleDataset(args.dataset_path + '/train', output_channel=args.output_channels,
@@ -74,7 +75,7 @@ def train_net(net, args, device):
     # logging info
     logging.info(f'''\n    Starting training:
     Epochs:          {args.epochs}
-    Batch size:      {args.batch_size}
+    Batch size:      {true_bs}
     Learning rate:   {args.learning_rate}
     Training size:   {len(train)}
     Validation size: {len(val)}
@@ -82,14 +83,14 @@ def train_net(net, args, device):
     Device:          {device.type}''')
 
     max_iou = 0
-    hparam_info = f'{args.net}-e{args.epochs}-bs{args.batch_size}-lr{args.learning_rate},fix2'
+    hparam_info = f'{args.net}-e{args.epochs}-bs{true_bs}-lr{args.learning_rate}'
 
     writer = None
     if args.save:
         writer = SummaryWriter(log_dir=f'runs/{hparam_info}')
         writer.add_text('hparam', str({'net': args.net,
                                        'epoch': args.epochs,
-                                       'batch size': args.batch_size,
+                                       'batch size': true_bs,
                                        'learning rate': args.learning_rate,
                                        'weight decay': weight_decay,
                                        'lr scheduler': 'None',
@@ -98,13 +99,10 @@ def train_net(net, args, device):
     # start
     optimizer.zero_grad()
     for epoch in range(args.epochs):
-        # if epoch == args.epochs // 2:
-        #     net.retrain()
-        # train
         with tqdm(total=len(train), desc=f'train: {epoch + 1}/{args.epochs}', unit='img', ascii=True) as pbar:
             epoch_loss, iou, n = 0, 0, 0
             net.train()
-            for img, mask in train_loader:
+            for idx, (img, mask) in enumerate(train_loader):
                 # forward
                 img, mask = map(lambda x: x.to(device), [img, mask])
                 mask_pre = net(img)
@@ -113,7 +111,8 @@ def train_net(net, args, device):
                 # backward
                 loss.backward()
 
-                if args.gradient_accumulation == 0 or args.batch_size * (epoch+1) // args.gradient_accumulation == 0:
+                # loss accumulation
+                if args.batch_size * (idx + 1) % true_bs == 0 or len(train_loader) == idx + 1:
                     # nn.utils.clip_grad_value_(net.parameters(), 0.1)
                     optimizer.step()
                     optimizer.zero_grad()
@@ -127,11 +126,11 @@ def train_net(net, args, device):
                 n += 1
 
                 # pbar update
-                pbar.set_postfix(**{'mean loss:': epoch_loss / n, 'm_IoU': iou / n})
+                pbar.set_postfix(**{'mean loss:': epoch_loss / n / args.batch_size, 'm_IoU': iou / n})
                 pbar.update(img.shape[0])
 
         if writer:
-            writer.add_scalar('Loss/train', epoch_loss / n, epoch)
+            writer.add_scalar('Loss/train', epoch_loss / n / args.batch_size, epoch)
             writer.add_scalar('m_IoU/train', iou / n, epoch)
             writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], epoch)
 
