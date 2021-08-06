@@ -3,19 +3,27 @@ import os
 import argparse
 import logging
 from tqdm import tqdm
-from nets import UNet, AttUNet, VGG_FCN, Res_FCN, UNet_CBAM, UNet_SE, PNet
+from nets import UNet, AttUNet, VGG_FCN, Res_FCN, UNet_CBAM, UNet_SE, PNet, VGG_BN_FCN
 from torch import optim, nn
 from torch.backends import cudnn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from utils import dice_loss, miou, SimpleDataset, TransSet
+import random
+import numpy as np
+
+
+seed = 42
+torch.manual_seed(seed)
+np.random.seed(seed)
+random.seed(seed)
 
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the nets on different datasets')
-    parser.add_argument('-e', '--epochs', type=int, default=50, help='Number of epochs')
-    parser.add_argument('-n', '--net', type=str, default='UNet',
-                        help='UNet AttUNet UNet_CBAM UNet_SE VGG_FCN Res_FCN')
+    parser.add_argument('-e', '--epochs', type=int, default=100, help='Number of epochs')
+    parser.add_argument('-n', '--net', type=str, default='PNet',
+                        help='UNet AttUNet UNet_CBAM UNet_SE VGG_FCN Res_FCN VGG_BN_FCN')
     parser.add_argument('-b', '--batch_size', type=int, default=2, help='Batch size')
     parser.add_argument('-i', '--input_channels', type=int, default=3, help='input channels')
     parser.add_argument('-o', '--output_channels', type=int, default=1, help='output channels')
@@ -83,7 +91,7 @@ def train_net(net, args, device):
     Device:          {device.type}''')
 
     max_iou = 0
-    hparam_info = f'{args.net}-e{args.epochs}-bs{true_bs}-lr{args.learning_rate}'
+    hparam_info = f'{args.net}-e{args.epochs}-bs{true_bs}-lr{args.learning_rate},2'
 
     writer = None
     if args.save:

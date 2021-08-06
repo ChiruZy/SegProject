@@ -61,6 +61,65 @@ class VGG_FCN(nn.Module):
         return s
 
 
+
+class VGG_BN_FCN(nn.Module):
+    def __init__(self, kwargs):
+        super(VGG_BN_FCN, self).__init__()
+        out_c = kwargs['out_c']
+        conv_sequential = list(models.vgg16_bn(pretrained=kwargs['pretrain']).children())[0]
+        modules_list = []
+        for i in range(24):
+            modules_list.append(conv_sequential._modules[str(i)])
+        self.stage1 = nn.Sequential(*modules_list)
+
+        modules_list = []
+        for i in range(24, 34):
+            modules_list.append(conv_sequential._modules[str(i)])
+        self.stage2 = nn.Sequential(*modules_list)
+
+        modules_list = []
+        for i in range(34, 44):
+            modules_list.append(conv_sequential._modules[str(i)])
+        modules_list.append(nn.Conv2d(512, 4096, 1))
+        modules_list.append(nn.Conv2d(4096, 4096, 1))
+        self.stage3 = nn.Sequential(*modules_list)
+
+        self.scores3 = nn.Conv2d(4096, out_c, 1)
+        self.scores2 = nn.Conv2d(512, out_c, 1)
+        self.scores1 = nn.Conv2d(256, out_c, 1)
+
+        self.upsample_8x = nn.ConvTranspose2d(out_c, out_c, 16, 8, 4, bias=False)
+        self.upsample_8x.weight.data = bilinear_kernel(out_c, out_c, 16)
+        self.upsample_16x = nn.ConvTranspose2d(out_c, out_c, 4, 2, 1, bias=False)
+        self.upsample_16x.weight.data = bilinear_kernel(out_c, out_c, 4)
+        self.upsample_32x = nn.ConvTranspose2d(out_c, out_c, 4, 2, 1, bias=False)
+        self.upsample_32x.weight.data = bilinear_kernel(out_c, out_c, 4)
+
+    def forward(self, x):
+        x = self.stage1(x)
+        s1 = x
+
+        x = self.stage2(x)
+        s2 = x
+
+        x = self.stage3(x)
+        s3 = x
+
+        s3 = self.scores3(s3)
+        s3 = self.upsample_32x(s3)
+
+        s2 = self.scores2(s2)
+        s2 = s2 + s3
+        s2 = self.upsample_16x(s2)
+
+        s1 = self.scores1(s1)
+        s = s1 + s2
+        s = self.upsample_8x(s)
+
+        return s
+
+
+
 class Res_FCN(nn.Module):
     def __init__(self, kwargs):
         super(Res_FCN, self).__init__()
