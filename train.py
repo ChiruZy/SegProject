@@ -13,15 +13,20 @@ import random
 import numpy as np
 
 
-seed = 42
-torch.manual_seed(seed)
-np.random.seed(seed)
-random.seed(seed)
+def set_random_seed(seed=1):
+    torch.manual_seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the nets on different datasets')
-    parser.add_argument('-e', '--epochs', type=int, default=100, help='Number of epochs')
+    parser.add_argument('-e', '--epoch', type=int, default=100, help='Number of epochs')
     parser.add_argument('-n', '--net', type=str, default='PNet',
                         help='UNet AttUNet UNet_CBAM UNet_SE VGG_FCN Res_FCN VGG_BN_FCN')
     parser.add_argument('-b', '--batch_size', type=int, default=2, help='Batch size')
@@ -33,7 +38,10 @@ def get_args():
     parser.add_argument('-a', '--gradient_accumulation', type=int, default=16, help='Gradient accumulation')
     parser.add_argument('-s', '--save', action="store_false", help='save train data')
 
-    return parser.parse_args()
+    args = vars(parser.parse_args())
+    args['seed'] = 1
+    args['device'] = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    return args
 
 
 def get_net(name, **kwargs):
@@ -43,7 +51,7 @@ def get_net(name, **kwargs):
 
 
 def predict_label(pred):
-    if args.output_channels == 1:
+    if args['output_channels'] == 1:
         res = torch.zeros_like(pred)
         res[pred > 0] = 1
         return res
@@ -51,30 +59,37 @@ def predict_label(pred):
         return torch.argmax(pred, dim=1, keepdim=True)
 
 
-def train_net(net, args, device):
-    # set hyperparameters
-    weight_decay = 1e-4
-    eta_min = 0
-    true_bs = args.batch_size if args.gradient_accumulation == 0 else args.gradient_accumulation
+def train_net(net, args):
+    ep = args['epoch']
+    tb = args["batch_size"] if args["gradient_accumulation"] == 0 else args["gradient_accumulation"]
+    oc = args['output_channels']
+    dp = args["dataset_path"]
+    bs = args['batch_size']
+    lr = args['learning_rate']
+    wd = 1e-4
+    em = None
+
+    net_name = args['net']
+    device = args['device']
+    save = args['save']
+
+
 
     # get dataset & dataloader
-    train = SimpleDataset(args.dataset_path + '/train', output_channel=args.output_channels,
+    train = SimpleDataset(dp + '/train', output_channel=oc,
                           trans_set=TransSet(resize=(224, 224), color_jitter=(0.1, 0.1, 0.1, 0.1), flip_p=0.5))
-    val = SimpleDataset(args.dataset_path + '/val', output_channel=args.output_channels,
-                        trans_set=TransSet(resize=(224, 224)))
-    test = SimpleDataset(args.dataset_path + '/test', output_channel=args.output_channels,
-                         trans_set=TransSet(resize=(224, 224)))
+    val = SimpleDataset(dp + '/val', output_channel=oc, trans_set=TransSet(resize=(224, 224)))
+    test = SimpleDataset(dp + '/test', output_channel=oc, trans_set=TransSet(resize=(224, 224)))
 
-    train_loader = DataLoader(train, batch_size=args.batch_size, shuffle=True, pin_memory=True)
-    val_loader = DataLoader(val, batch_size=args.batch_size, shuffle=True, pin_memory=True)
-    test_loader = DataLoader(test, batch_size=args.batch_size, shuffle=False, pin_memory=True)
+    train_loader = DataLoader(train, batch_size=bs, shuffle=True, pin_memory=True)
+    val_loader = DataLoader(val, batch_size=bs, shuffle=True, pin_memory=True)
+    test_loader = DataLoader(test, batch_size=bs, shuffle=False, pin_memory=True)
 
     # set optim, loss func, scheduler
-    optimizer = optim.SGD(list(net.parameters()), lr=args.learning_rate, weight_decay=weight_decay, momentum=0.9)
-    criterion = nn.CrossEntropyLoss() if args.output_channels > 1 else nn.BCEWithLogitsLoss()
+    optimizer = optim.SGD(list(net.parameters()), lr=lr, weight_decay=wd, momentum=0.9)
+    criterion = nn.CrossEntropyLoss() if oc > 1 else nn.BCEWithLogitsLoss()
     scheduler = None
-    # scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs * len(train) // args.batch_size,
-    #                                                  eta_min=eta_min)
+    # scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, ep * len(train) // tb, eta_min=em)
 
     # set summary
     if not os.path.exists('runs'):
@@ -82,45 +97,46 @@ def train_net(net, args, device):
 
     # logging info
     logging.info(f'''\n    Starting training:
-    Epochs:          {args.epochs}
-    Batch size:      {true_bs}
-    Learning rate:   {args.learning_rate}
+    Epochs:          {ep}
+    Batch size:      {tb}
+    Learning rate:   {lr}
     Training size:   {len(train)}
     Validation size: {len(val)}
     Testing size:    {len(test)}
     Device:          {device.type}''')
 
     max_iou = 0
-    hparam_info = f'{args.net}-e{args.epochs}-bs{true_bs}-lr{args.learning_rate},2'
+    hparam_info = f'{net_name}-e{ep}-bs{tb}-lr{lr}-seed_{args["seed"]}'
 
     writer = None
-    if args.save:
+    if save:
         writer = SummaryWriter(log_dir=f'runs/{hparam_info}')
-        writer.add_text('hparam', str({'net': args.net,
-                                       'epoch': args.epochs,
-                                       'batch size': true_bs,
-                                       'learning rate': args.learning_rate,
-                                       'weight decay': weight_decay,
-                                       'lr scheduler': 'None',
-                                       'eta min': eta_min}))
+        writer.add_text('hparam', str({'net': net_name,
+                                       'epoch': ep,
+                                       'batch size': bs,
+                                       'learning rate': lr,
+                                       'weight decay': wd,
+                                       'lr scheduler': scheduler.__class__.__name__,
+                                       'eta min': em}))
 
     # start
     optimizer.zero_grad()
-    for epoch in range(args.epochs):
-        with tqdm(total=len(train), desc=f'train: {epoch + 1}/{args.epochs}', unit='img', ascii=True) as pbar:
+    for epoch in range(ep):
+
+        with tqdm(total=len(train), desc=f'train: {epoch + 1}/{ep}', unit='img', ascii=True) as pbar:
             epoch_loss, iou, n = 0, 0, 0
             net.train()
             for idx, (img, mask) in enumerate(train_loader):
                 # forward
                 img, mask = map(lambda x: x.to(device), [img, mask])
                 mask_pre = net(img)
-                loss = criterion(mask_pre, mask) + dice_loss(mask_pre, mask, args.output_channels)
+                loss = criterion(mask_pre, mask) + dice_loss(mask_pre, mask, oc)
 
                 # backward
                 loss.backward()
 
                 # loss accumulation
-                if args.batch_size * (idx + 1) % true_bs == 0 or len(train_loader) == idx + 1:
+                if bs * (idx + 1) % tb == 0 or len(train_loader) == idx + 1:
                     # nn.utils.clip_grad_value_(net.parameters(), 0.1)
                     optimizer.step()
                     optimizer.zero_grad()
@@ -130,22 +146,22 @@ def train_net(net, args, device):
 
                 # calc loss & iou
                 epoch_loss += loss.item()
-                iou += miou(predict_label(mask_pre.detach()), mask, args.output_channels)
+                iou += miou(predict_label(mask_pre.detach()), mask, oc)
                 n += 1
 
                 # pbar update
-                pbar.set_postfix(**{'mean loss:': epoch_loss / n / args.batch_size, 'm_IoU': iou / n})
+                pbar.set_postfix(**{'mean loss:': epoch_loss / n / bs, 'm_IoU': iou / n})
                 pbar.update(img.shape[0])
 
         if writer:
-            writer.add_scalar('Loss/train', epoch_loss / n / args.batch_size, epoch)
+            writer.add_scalar('Loss/train', epoch_loss / n / bs, epoch)
             writer.add_scalar('m_IoU/train', iou / n, epoch)
             writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], epoch)
 
         # val
         if not val:
             continue
-        with tqdm(total=len(val), desc=f'val:   {epoch + 1}/{args.epochs}', unit='img', ascii=True) as pbar:
+        with tqdm(total=len(val), desc=f'val:   {epoch + 1}/{ep}', unit='img', ascii=True) as pbar:
             net.eval()
             iou, n = 0, 0
 
@@ -154,7 +170,7 @@ def train_net(net, args, device):
                     img, mask = map(lambda x: x.to(device), [img, mask])
                     mask_pred = predict_label(net(img).detach())
 
-                    iou += miou(mask_pred, mask, args.output_channels)
+                    iou += miou(mask_pred, mask, oc)
                     n += 1
 
                     pbar.set_postfix(**{'m_IoU:': iou / n})
@@ -181,7 +197,7 @@ def train_net(net, args, device):
         iou, n = 0, 0
         with tqdm(total=len(test), desc=f'test: ', unit='img', ascii=True) as pbar:
 
-            if args.save:
+            if save:
                 net.load_state_dict(torch.load(f'checkpoint/{hparam_info}.pt'))
 
             net.eval()
@@ -190,7 +206,7 @@ def train_net(net, args, device):
                     img, mask = map(lambda x: x.to(device), [img, mask])
                     mask_pred = predict_label(net(img).detach())
 
-                    iou += miou(mask_pred, mask, args.output_channels)
+                    iou += miou(mask_pred, mask, oc)
                     n += 1
 
                     pbar.set_postfix(**{'m_IoU:': iou / n})
@@ -212,18 +228,15 @@ def train_net(net, args, device):
 if __name__ == '__main__':
     # parser args
     args = get_args()
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-        cudnn.benchmark = True
-    else:
-        device = torch.device('cpu')
-    net = get_net(args.net, in_c=args.input_channels, out_c=args.output_channels, pretrain=args.pretrain).to(device=device)
+    set_random_seed(args['seed'])
+    net = get_net(args['net'], in_c=args['input_channels'], out_c=args['output_channels'],
+                  pretrain=args['pretrain']).to(device=args['device'])
 
     # logging setting
     logging.basicConfig(level=logging.DEBUG, format='%(levelname)s:%(message)s')
-    logging.info(f'\n\tNetwork: {args.net}\n'
-                 f'\t{args.input_channels} input channels\n'
-                 f'\t{args.output_channels} output channels (classes)\n')
+    logging.info(f'\n\tNetwork: {args["net"]}\n'
+                 f'\t{args["input_channels"]} input channels\n'
+                 f'\t{args["output_channels"]} output channels (classes)\n')
 
     # train
-    train_net(net, args, device)
+    train_net(net, args)
